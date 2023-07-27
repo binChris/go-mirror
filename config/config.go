@@ -8,18 +8,19 @@ import (
 )
 
 type Config struct {
-	Source      string
-	Destination string
-	CreateDir   bool
-	DeleteDir   bool
+	Source        string
+	Destination   string
+	CreateDir     rune
+	DeleteDir     rune
+	CreateFile    rune
+	OverwriteFile rune
+	DeleteFile    rune
 }
 
 func FromCommandLine() (Config, int) {
 	var cfg Config
 	parallel := 5
 	flag.ErrHelp = errors.New("usage: mirror (flags) (source dir) (target dir)")
-	flag.BoolVar(&cfg.CreateDir, "create-dir", false, "create directories in destination without asking")
-	flag.BoolVar(&cfg.DeleteDir, "delete-dir", false, "delete directories from destination without asking")
 	flag.IntVar(&parallel, "parallel", parallel, "number of concurrent threads")
 	flag.Parse()
 	if n := flag.NArg(); n != 2 {

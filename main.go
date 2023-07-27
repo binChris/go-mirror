@@ -1,9 +1,9 @@
 package main
 
 import (
-	"github.com/binChris/go-mirror/config"
-	"github.com/binChris/go-mirror/console"
-	"github.com/binChris/go-mirror/mirror"
+	"github.com/binChris/mirror/config"
+	"github.com/binChris/mirror/console"
+	"github.com/binChris/mirror/mirror"
 )
 
 func main() {

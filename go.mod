@@ -1,4 +1,4 @@
-module github.com/binChris/go-mirror
+module github.com/binChris/mirror
 
 go 1.20
 

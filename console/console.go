@@ -59,13 +59,13 @@ func (c *Console) Choice(msg string, options string) rune {
 	c.waitForInput.Lock()
 	defer c.waitForInput.Unlock()
 	for {
-		fmt.Print(msg, ": ")
+		fmt.Print(msg, "? ")
 		b := make([]byte, 1)
 		_, _ = os.Stdin.Read(b)
 		r := rune(b[0])
 		for _, o := range options {
 			if r == o {
-				fmt.Println()
+				fmt.Println(string(r))
 				return r
 			}
 		}

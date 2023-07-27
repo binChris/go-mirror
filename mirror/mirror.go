@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/binChris/go-mirror/config"
+	"github.com/binChris/mirror/config"
 )
 
 type Frontend interface {
@@ -75,7 +75,7 @@ func (m *mirror) get() (config.Config, bool) {
 	return cfg, true
 }
 
-func (m *mirror) process(cfg config.Config) {
+func (m *mirror) process(cfg *config.Config) {
 	m.throttle <- struct{}{}
 	defer func() { <-m.throttle }()
 	m.frontend.Progress(fmt.Sprintf("Mirroring %s to %s", cfg.Source, cfg.Destination))
@@ -123,7 +123,7 @@ func (m *mirror) process(cfg config.Config) {
 	}
 }
 
-func (m *mirror) compareSourceWithDestination(cfg config.Config) (subs []config.Config, delDirs, delFiles, cpFiles []string) {
+func (m *mirror) compareSourceWithDestination(cfg *config.Config) (subs []config.Config, delDirs, delFiles, cpFiles []string) {
 	sDirs, sFiles, err := readDir(cfg.Source, false)
 	if err != nil {
 		m.frontend.Fatal(fmt.Sprintf("Cannot read directory '%s': %s", cfg.Source, err))
@@ -140,17 +140,10 @@ func (m *mirror) compareSourceWithDestination(cfg config.Config) (subs []config.
 	for dirName, inf := range sDirs {
 		dDir := filepath.Join(cfg.Destination, dirName)
 		if _, exInDst := dDirs[dirName]; !exInDst {
-			if !cfg.CreateDir {
-				choice := m.frontend.Choice(fmt.Sprintf("Create dir '%s' (y=yes/n=no/A=all)?", dDir), "ynA")
-				switch choice {
-				case 'n':
-					continue
-				case 'A':
-					cfg.CreateDir = true
-				}
-			} else {
-				m.frontend.Progress(fmt.Sprintf("Creating dir %s", dDir))
+			if !m.allow(&cfg.CreateDir, "Create dir '%s'", dDir) {
+				continue
 			}
+			m.frontend.Progress(fmt.Sprintf("Creating dir %s", dDir))
 			os.Mkdir(dDir, inf.Type().Perm())
 			atomic.AddUint64(&m.dirsCreated, 1)
 		}
@@ -162,12 +155,18 @@ func (m *mirror) compareSourceWithDestination(cfg config.Config) (subs []config.
 	// determine destination dirs to be deleted
 	for dst := range dDirs {
 		if _, exInSrc := sDirs[dst]; !exInSrc {
+			if !m.allow(&cfg.DeleteDir, "Delete dir '%s'", dst) {
+				continue
+			}
 			delDirs = append(delDirs, dst)
 		}
 	}
 	// determine destination files to be deleted
 	for dst := range dFiles {
 		if _, exInSrc := sFiles[dst]; !exInSrc {
+			if !m.allow(&cfg.DeleteFile, "Delete file '%s'", dst) {
+				continue
+			}
 			delFiles = append(delFiles, dst)
 		}
 	}
@@ -175,8 +174,15 @@ func (m *mirror) compareSourceWithDestination(cfg config.Config) (subs []config.
 	for fName := range sFiles {
 		sPath := filepath.Join(cfg.Source, fName)
 		dPath := filepath.Join(cfg.Destination, fName)
-		if _, exInDst := dFiles[fName]; !exInDst || m.filesAreDifferent(sPath, dPath) {
+		if _, exInDst := dFiles[fName]; !exInDst {
+			if !m.allow(&cfg.CreateFile, "Create file '%s'", dPath) {
+				continue
+			}
 			cpFiles = append(cpFiles, fName)
+		} else if m.filesAreDifferent(sPath, dPath) {
+			if !m.allow(&cfg.OverwriteFile, "Overwrite file '%s',dPath") {
+				continue
+			}
 		} else {
 			atomic.AddUint64(&m.filesIdentical, 1)
 		}
@@ -194,6 +200,30 @@ func (m *mirror) filesAreDifferent(path1, path2 string) bool {
 		m.frontend.Fatal(fmt.Sprintf("Cannot get file info for '%s': %s", path2, err))
 	}
 	return fi1.Size() != fi2.Size() || fi1.ModTime().Sub(fi2.ModTime()) > time.Second
+}
+
+func (m *mirror) allow(flagPtr *rune, msg string, msgVals ...interface{}) bool {
+	if *flagPtr == 'a' {
+		return true
+	}
+	if *flagPtr == 'x' {
+		return false
+	}
+	switch m.frontend.Choice(fmt.Sprintf(msg+" (y=yes,n=no,a=all,x=none,q=quit)", msgVals...), "ynaq") {
+	case 'y':
+		return true
+	case 'n':
+		return false
+	case 'a':
+		*flagPtr = 'a'
+		return true
+	case 'x':
+		*flagPtr = 'x'
+		return false
+	case 'q':
+		os.Exit(1)
+	}
+	panic("choice")
 }
 
 func readDir(path string, create bool) (dirs map[string]fs.DirEntry, files map[string]fs.DirEntry, err error) {
