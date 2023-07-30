@@ -21,8 +21,8 @@ type Frontend interface {
 
 type mirror struct {
 	frontend       Frontend
-	queue          []config.Config
 	m              sync.Mutex
+	queue          []config.Config
 	throttle       chan struct{}
 	wg             sync.WaitGroup
 	dirsCreated    uint64
@@ -75,7 +75,7 @@ func (m *mirror) get() (config.Config, bool) {
 	return cfg, true
 }
 
-func (m *mirror) process(cfg *config.Config) {
+func (m *mirror) process(cfg config.Config) {
 	m.throttle <- struct{}{}
 	defer func() { <-m.throttle }()
 	m.frontend.Progress(fmt.Sprintf("Mirroring %s to %s", cfg.Source, cfg.Destination))
@@ -123,7 +123,7 @@ func (m *mirror) process(cfg *config.Config) {
 	}
 }
 
-func (m *mirror) compareSourceWithDestination(cfg *config.Config) (subs []config.Config, delDirs, delFiles, cpFiles []string) {
+func (m *mirror) compareSourceWithDestination(cfg config.Config) (subs []config.Config, delDirs, delFiles, cpFiles []string) {
 	sDirs, sFiles, err := readDir(cfg.Source, false)
 	if err != nil {
 		m.frontend.Fatal(fmt.Sprintf("Cannot read directory '%s': %s", cfg.Source, err))
@@ -140,7 +140,7 @@ func (m *mirror) compareSourceWithDestination(cfg *config.Config) (subs []config
 	for dirName, inf := range sDirs {
 		dDir := filepath.Join(cfg.Destination, dirName)
 		if _, exInDst := dDirs[dirName]; !exInDst {
-			if !m.allow(&cfg.CreateDir, "Create dir '%s'", dDir) {
+			if !m.allow(cfg.CreateDir, "Create dir '%s'", dDir) {
 				continue
 			}
 			m.frontend.Progress(fmt.Sprintf("Creating dir %s", dDir))
@@ -155,7 +155,7 @@ func (m *mirror) compareSourceWithDestination(cfg *config.Config) (subs []config
 	// determine destination dirs to be deleted
 	for dst := range dDirs {
 		if _, exInSrc := sDirs[dst]; !exInSrc {
-			if !m.allow(&cfg.DeleteDir, "Delete dir '%s'", dst) {
+			if !m.allow(cfg.DeleteDir, "Delete dir '%s'", dst) {
 				continue
 			}
 			delDirs = append(delDirs, dst)
@@ -164,7 +164,7 @@ func (m *mirror) compareSourceWithDestination(cfg *config.Config) (subs []config
 	// determine destination files to be deleted
 	for dst := range dFiles {
 		if _, exInSrc := sFiles[dst]; !exInSrc {
-			if !m.allow(&cfg.DeleteFile, "Delete file '%s'", dst) {
+			if !m.allow(cfg.DeleteFile, "Delete file '%s'", dst) {
 				continue
 			}
 			delFiles = append(delFiles, dst)
@@ -175,12 +175,12 @@ func (m *mirror) compareSourceWithDestination(cfg *config.Config) (subs []config
 		sPath := filepath.Join(cfg.Source, fName)
 		dPath := filepath.Join(cfg.Destination, fName)
 		if _, exInDst := dFiles[fName]; !exInDst {
-			if !m.allow(&cfg.CreateFile, "Create file '%s'", dPath) {
+			if !m.allow(cfg.CreateFile, "Create file '%s'", dPath) {
 				continue
 			}
 			cpFiles = append(cpFiles, fName)
 		} else if m.filesAreDifferent(sPath, dPath) {
-			if !m.allow(&cfg.OverwriteFile, "Overwrite file '%s',dPath") {
+			if !m.allow(cfg.OverwriteFile, "Overwrite file '%s'", dPath) {
 				continue
 			}
 		} else {
@@ -203,6 +203,8 @@ func (m *mirror) filesAreDifferent(path1, path2 string) bool {
 }
 
 func (m *mirror) allow(flagPtr *rune, msg string, msgVals ...interface{}) bool {
+	m.m.Lock()
+	defer m.m.Unlock()
 	if *flagPtr == 'a' {
 		return true
 	}
@@ -244,18 +246,31 @@ func readDir(path string, create bool) (dirs map[string]fs.DirEntry, files map[s
 }
 
 func copyFile(src, dst string) error {
-	srcF, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("Could not open '%s' for reading", src)
+	copy := func() error {
+		srcF, err := os.Open(src)
+		if err != nil {
+			return fmt.Errorf("Could not open '%s' for reading", src)
+		}
+		defer srcF.Close()
+		dstF, err := os.Create(dst)
+		if err != nil {
+			return fmt.Errorf("Could not create '%s' for writing", dst)
+		}
+		defer dstF.Close()
+		if _, err := io.Copy(dstF, srcF); err != nil {
+			return fmt.Errorf("error copying file '%s': %s", src, err)
+		}
+		return nil
 	}
-	defer srcF.Close()
-	dstF, err := os.Create(dst)
-	if err != nil {
-		return fmt.Errorf("Could not open '%s' for writing", dst)
+	if err := copy(); err != nil {
+		return err
 	}
-	defer dstF.Close()
-	if _, err := io.Copy(dstF, srcF); err != nil {
-		return fmt.Errorf("error copying file '%s': %s", src, err)
+	inf, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("get file info for '%s': %w", src, err)
+	}
+	if err := os.Chtimes(dst, inf.ModTime(), inf.ModTime()); err != nil {
+		return fmt.Errorf("set modification time for '%s': %w", dst, err)
 	}
 	return nil
 }
